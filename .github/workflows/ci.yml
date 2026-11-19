@@ -1,0 +1,248 @@
+
+name: ShopNest CI
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+
+  # -----------------------------
+  # FRONTEND LINT
+  # -----------------------------
+  frontend-lint:
+    name: Frontend Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run frontend lint
+        run: npm run lint:frontend
+
+  # -----------------------------
+  # FRONTEND TEST
+  # -----------------------------
+  frontend-test:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npm run test:frontend
+
+  # -----------------------------
+  # BACKEND LINT
+  # -----------------------------
+  backend-lint:
+    name: Backend Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run backend lint
+        run: npm run lint:backend
+
+  # -----------------------------
+  # BACKEND TEST - NODE MATRIX
+  # -----------------------------
+  backend-test:
+    name: Backend Tests (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run backend tests
+        run: npm run test:backend
+
+  # -----------------------------
+  # FRONTEND BUILD
+  # -----------------------------
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+
+    needs:
+      - frontend-lint
+      - frontend-test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build:frontend
+
+      - name: Upload frontend build
+        uses: actions/upload-artifact@v4
+        with:
+          name: shopnest-frontend
+          path: public/
+          retention-days: 7
+
+  # -----------------------------
+  # BACKEND BUILD
+  # -----------------------------
+  backend-build:
+    name: Backend Build
+    runs-on: ubuntu-latest
+
+    needs:
+      - backend-lint
+      - backend-test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build backend
+        run: npm run build:backend
+
+      - name: Upload backend build
+        uses: actions/upload-artifact@v4
+        with:
+          name: shopnest-backend
+          path: |
+            server.js
+            package.json
+            package-lock.json
+            config/
+            src/
+            database/
+            scripts/
+            deploy/
+            .env.example
+          retention-days: 7
+
+  # -----------------------------
+  # REQUIRED CI GATE
+  # -----------------------------
+  ci-gate:
+    name: CI Required Checks
+    runs-on: ubuntu-latest
+
+    needs:
+      - frontend-lint
+      - frontend-test
+      - backend-lint
+      - backend-test
+      - frontend-build
+      - backend-build
+
+    steps:
+      - name: All CI checks passed
+        run: echo "All ShopNest CI checks passed!"
+
+  # -----------------------------
+  # PACKAGE RELEASE ARTIFACT
+  # -----------------------------
+  package-release:
+    name: Package ShopNest Release
+    runs-on: ubuntu-latest
+
+    needs:
+      - ci-gate
+      - frontend-build
+      - backend-build
+
+    steps:
+      - name: Download backend build
+        uses: actions/download-artifact@v4
+        with:
+          name: shopnest-backend
+          path: bundle
+
+      - name: Download frontend build
+        uses: actions/download-artifact@v4
+        with:
+          name: shopnest-frontend
+          path: bundle/public
+
+      - name: Verify release files
+        run: |
+          test -f bundle/server.js
+          test -f bundle/package.json
+          test -f bundle/package-lock.json
+          test -f bundle/public/index.html
+
+      - name: Upload complete release
+        uses: actions/upload-artifact@v4
+        with:
+          name: shopnest-release
+          path: bundle/
+          retention-days: 7

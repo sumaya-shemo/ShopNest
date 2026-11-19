@@ -1,0 +1,90 @@
+
+name: ShopNest CD
+
+on:
+  workflow_run:
+    workflows:
+      - ShopNest CI
+    types:
+      - completed
+    branches:
+      - main
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy:
+    name: Deploy to Ubuntu Server
+    runs-on: ubuntu-latest
+
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.event == 'push'
+
+    steps:
+      - name: Download CI release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: shopnest-release
+          path: release
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Verify deployment files
+        run: |
+          test -f release/server.js
+          test -f release/package.json
+          test -f release/package-lock.json
+          test -f release/public/index.html
+
+      - name: Configure SSH
+        env:
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          ssh-keyscan -p "${SERVER_PORT:-22}" \
+            -H "$SERVER_HOST" >> ~/.ssh/known_hosts
+
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy files using rsync
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          rsync -avz --delete \
+            --exclude='.env' \
+            --exclude='node_modules/' \
+            -e "ssh -p ${SERVER_PORT:-22}" \
+            release/ \
+            "${SERVER_USER}@${SERVER_HOST}:/var/www/shopnest/"
+
+      - name: Install dependencies and restart application
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          ssh -p "${SERVER_PORT:-22}" \
+            "${SERVER_USER}@${SERVER_HOST}" \
+            'set -e
+             cd /var/www/shopnest
+             npm ci --omit=dev
+             sudo systemctl restart shopnest
+             sudo systemctl is-active --quiet shopnest
+             curl --fail --retry 5 --retry-delay 2 \
+               http://localhost:3000/health'
+
+      - name: Deployment successful
+        run: echo "ShopNest deployed successfully!"
