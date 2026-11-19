@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ShopNest</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="container">
+    <header><p class="eyebrow">INVENTORY CATALOG</p><h1>ShopNest</h1><p class="subtitle">Browse products loaded from your MySQL database.</p></header>
+    <section class="toolbar">
+      <input id="search" type="search" placeholder="Search products or SKU..." aria-label="Search products">
+      <select id="category" aria-label="Filter by category"><option value="">All categories</option></select>
+    </section>
+    <p id="status" role="status">Loading products...</p>
+    <section id="products" class="grid" aria-live="polite"></section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

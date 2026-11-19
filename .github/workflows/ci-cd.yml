@@ -1,0 +1,138 @@
+name: ShopNest CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  frontend-ci:
+    name: Frontend CI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Lint frontend
+        run: npm run lint:frontend
+
+      - name: Test frontend
+        run: npm run test:frontend
+
+      - name: Build frontend
+        run: npm run build:frontend
+
+  backend-ci:
+    name: Backend CI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Lint backend
+        run: npm run lint:backend
+
+      - name: Test backend
+        run: npm run test:backend
+
+      - name: Build backend
+        run: npm run build:backend
+
+  deploy:
+    name: Deploy ShopNest to Ubuntu
+    needs: [frontend-ci, backend-ci]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install rsync
+        run: sudo apt-get update && sudo apt-get install -y rsync
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          set -e
+          test -n "$SSH_PRIVATE_KEY" || { echo "SERVER_SSH_KEY is missing"; exit 1; }
+          test -n "$SERVER_HOST" || { echo "SERVER_HOST is missing"; exit 1; }
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          PORT="${SERVER_PORT:-22}"
+          ssh-keyscan -p "$PORT" -H "$SERVER_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Verify SSH login
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          set -e
+          test -n "$SERVER_USER" || { echo "SERVER_USER is missing"; exit 1; }
+          PORT="${SERVER_PORT:-22}"
+          ssh -p "$PORT" -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes \
+            "$SERVER_USER@$SERVER_HOST" "whoami"
+
+      - name: Sync application
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          PORT="${SERVER_PORT:-22}"
+          rsync -az --delete \
+            --exclude='.git/' \
+            --exclude='node_modules/' \
+            --exclude='.env' \
+            --exclude='coverage/' \
+            --exclude='docker-compose.yml' \
+            -e "ssh -p $PORT -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes" \
+            ./ "$SERVER_USER@$SERVER_HOST:/var/www/shopnest/"
+
+      - name: Install production dependencies and restart
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          PORT="${SERVER_PORT:-22}"
+          ssh -p "$PORT" -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes \
+            "$SERVER_USER@$SERVER_HOST" <<'EOF'
+              set -e
+              cd /var/www/shopnest
+              npm install --omit=dev
+              sudo systemctl restart shopnest
+              sudo systemctl is-active --quiet shopnest
+              curl --fail http://127.0.0.1:3000/health
+          EOF

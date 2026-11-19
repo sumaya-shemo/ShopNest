@@ -1,0 +1,35 @@
+{
+  "name": "shopnest",
+  "version": "1.0.0",
+  "description": "ShopNest product management and inventory application",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "db:setup": "node scripts/setup-database.js",
+    "db:seed": "node scripts/seed-database.js",
+    "lint": "eslint .",
+    "lint:backend": "eslint server.js src config test/backend",
+    "lint:frontend": "eslint public test/frontend",
+    "test": "node --test test/backend/*.test.js test/frontend/*.test.js",
+    "test:backend": "node --test test/backend/*.test.js",
+    "test:frontend": "node --test test/frontend/*.test.js",
+    "build": "npm run build:backend && npm run build:frontend",
+    "build:backend": "node --check server.js && node --check src/app.js && node --check src/controllers/productController.js && node --check src/routes/productRoutes.js",
+    "build:frontend": "node --check public/app.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mysql2": "^3.14.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.22.0",
+    "eslint": "^9.22.0",
+    "supertest": "^7.1.0",
+    "jsdom": "^26.1.0"
+  }
+}

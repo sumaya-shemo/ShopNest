@@ -1,0 +1,17 @@
+[Unit]
+Description=ShopNest Product Management Application
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/var/www/shopnest
+Environment=NODE_ENV=production
+Environment=PORT=3000
+EnvironmentFile=/var/www/shopnest/.env
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
