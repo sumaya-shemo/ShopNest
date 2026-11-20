@@ -68,7 +68,7 @@ jobs:
             --exclude='node_modules/' \
             -e "ssh -p ${SERVER_PORT:-22}" \
             release/ \
-            "${SERVER_USER}@${SERVER_HOST}:/var/www/shopnest/"
+            "${SERVER_USER}@${SERVER_HOST}:/var/www/ShopNest/"
 
       - name: Install dependencies and restart application
         env:
@@ -82,7 +82,7 @@ jobs:
              cd /var/www/shopnest
              npm ci --omit=dev
              sudo systemctl restart shopnest
-             sudo systemctl is-active --quiet shopnest
+             sudo systemctl is-active --quiet ShopNest
              curl --fail --retry 5 --retry-delay 2 \
                http://localhost:3000/health'
 
