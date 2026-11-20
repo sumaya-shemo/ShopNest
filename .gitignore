@@ -1,5 +1,14 @@
-node_modules/
+# Environment configuration
 .env
+.env.*
+!.env.example
+
+# SSH keys and certificates
+*.pem
+*.key
+id_rsa
+id_ed25519
+
+# Dependencies and generated files
+node_modules/
 coverage/
-*.log
-.DS_Store
