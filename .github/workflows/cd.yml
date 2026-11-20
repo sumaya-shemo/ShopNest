@@ -79,10 +79,10 @@ jobs:
           ssh -p "${SERVER_PORT:-22}" \
             "${SERVER_USER}@${SERVER_HOST}" \
             'set -e
-             cd /var/www/shopnest
+             cd /var/www/ShopNest
              npm ci --omit=dev
              sudo systemctl restart shopnest
-             sudo systemctl is-active --quiet ShopNest
+             sudo systemctl is-active --quiet shopnest
              curl --fail --retry 5 --retry-delay 2 \
                http://localhost:3000/health'
 
