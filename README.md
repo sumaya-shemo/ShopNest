@@ -549,6 +549,354 @@ Do not print secret values to workflow logs. Avoid enabling shell tracing (`set 
 
 The runtime configuration values are maintained in the server-side environment file. They are not all GitHub Actions secrets or variables.
 
+## Part E: Automated Deployment to EC2
+
+## 1. Part E requirements
+
+The deployment process should:
+
+1. Start after the ShopNest CI workflow completes successfully for a push to `main`.
+2. Download the release artifact produced by that exact CI run.
+3. Connect to the Ubuntu EC2 instance using SSH.
+4. Upload the application files to the server.
+5. Install production dependencies.
+6. Restart the ShopNest application service.
+7. Verify that the application is running and responding.
+8. Record the Git commit SHA deployed to the server.
+9. Keep the database private and keep runtime secrets on the server.
+
+## 2. Deployment architecture
+
+For the assignment's single-EC2 deployment, the application can be arranged as three logical tiers on one Ubuntu server:
+
+```text
+                    Internet
+                       |
+                 HTTPS / HTTP
+                       |
+                 AWS Security Group
+                       |
+                  Nginx :80/:443
+                  /             \
+          Frontend files       /api requests
+          /var/www/.../public       |
+                               Express API
+                                127.0.0.1:3000
+                                      |
+                                   MySQL
+                                127.0.0.1:3306
+```
+
+GitHub Actions deploys the application to EC2:
+
+```text
+Developer pushes to main
+          |
+          v
+    GitHub CI workflow
+          |
+    CI checks succeed?
+          |
+          v
+  Package release artifact
+          |
+          v
+    GitHub CD workflow
+          |
+       SSH / rsync
+          |
+          v
+       Ubuntu EC2
+          |
+   Install dependencies
+          |
+   Restart systemd service
+          |
+     Health check
+          |
+  Record deployed commit SHA
+```
+
+**Important:** This is a logical three-tier layout, not three physically separate servers.
+
+## 3. AWS EC2 and network configuration
+
+### 3.1 Security Group
+
+Recommended inbound rules for a basic deployment:
+
+![Security Group]()
+
+### 3.2 Install server packages
+
+Connect to EC2:
+
+```bash
+ssh -i your-key.pem ubuntu@EC2_PUBLIC_IP
+```
+
+Update Ubuntu:
+
+```bash
+sudo apt update
+sudo apt upgrade -y
+```
+
+Install required packages:
+
+```bash
+sudo apt install -y nginx mysql-server git rsync curl
+```
+
+Install a supported Node.js LTS release using your chosen trusted installation method, then verify:
+
+```bash
+node --version
+npm --version
+nginx -v
+mysql --version
+```
+## 4. MySQL configuration
+
+The database should not be publicly reachable.
+
+Check MySQL:
+
+```bash
+sudo systemctl status mysql
+```
+
+Open the MySQL shell:
+
+```bash
+sudo mysql
+```
+
+Example database and application user setup:
+
+```sql
+CREATE DATABASE shopnest_db;
+
+CREATE USER 'shopnest_user'@'localhost'
+IDENTIFIED BY 'REPLACE_WITH_A_STRONG_UNIQUE_PASSWORD';
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON shopnest_db.*
+TO 'shopnest_user'@'localhost';
+
+FLUSH PRIVILEGES;
+EXIT;
+```
+Check the MySQL bind address:
+
+```bash
+sudo ss -tlnp | grep 3306
+```
+
+For a same-server database, configure MySQL to listen on loopback (`127.0.0.1`) and restart it:
+
+```bash
+sudo systemctl restart mysql
+
+## 5. Application configuration on EC2
+
+Keep production environment variables outside the Git repository and outside the uploaded release.
+
+Create a protected configuration directory:
+
+```bash
+sudo mkdir -p /etc/shopnest
+sudo chown root:root /etc/shopnest
+sudo chmod 750 /etc/shopnest
+```
+
+Create the production environment file:
+
+```bash
+sudo nano /etc/shopnest/shopnest.env
+```
+Protect the file:
+
+```bash
+sudo chown root:root /etc/shopnest/shopnest.env
+sudo chmod 600 /etc/shopnest/shopnest.env
+```
+## 6. Create the ShopNest systemd service
+
+Create the service file:
+
+```bash
+sudo nano /etc/systemd/system/shopnest.service
+```
+
+Example service configuration:
+
+```ini
+[Unit]
+Description=ShopNest Product Management Application
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/var/www/shopnest
+EnvironmentFile=/etc/shopnest/shopnest.env
+ExecStart=/usr/bin/node /var/www/shopnest/server.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Check the actual Node.js path before using it:
+
+```bash
+which node
+```
+
+If it is not `/usr/bin/node`, update `ExecStart` to the path returned by `which node`.
+
+Create the deployment directory and give the deployment user ownership:
+
+```bash
+sudo mkdir -p /var/www/shopnest
+sudo chown -R ubuntu:ubuntu /var/www/shopnest
+```
+
+Load and enable the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable shopnest
+```
+
+The first start will succeed only after the application files have been deployed:
+
+```bash
+sudo systemctl start shopnest
+sudo systemctl status shopnest
+```
+
+Useful troubleshooting commands:
+
+```bash
+sudo journalctl -u shopnest -n 100 --no-pager
+sudo journalctl -u shopnest -f
+sudo systemctl restart shopnest
+sudo systemctl is-active shopnest
+
+## 7. Nginx configuration
+
+Nginx is the public web server and reverse proxy. It can serve the frontend and forward API requests to Express.
+
+Create a site configuration:
+
+```bash
+sudo nano /etc/nginx/sites-available/shopnest
+```
+
+Example:
+
+```nginx
+server {
+    listen 80;
+    server_name YOUR_DOMAIN_OR_PUBLIC_IP;
+
+    root /var/www/shopnest/public;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /health {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+    }
+}
+```
+
+The `proxy_pass` form above preserves the incoming URI path. Confirm that the Express API routes expect paths such as `/api/products`. If the Express application expects `/products` instead, adjust the Nginx URI handling accordingly.
+
+Enable the site:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/shopnest /etc/nginx/sites-enabled/shopnest
+sudo nginx -t
+sudo systemctl reload nginx
+
+## 12. Common deployment errors and troubleshooting
+
+### 12.1 `Permission denied (publickey)`
+
+Check:
+
+- `SERVER_USER` matches the EC2 login user, for example `ubuntu`.
+- `SERVER_SSH_KEY` contains the complete private key, including its header and footer.
+- The matching public key is in the correct user's `~/.ssh/authorized_keys`.
+- `.ssh` permissions are `700` and `authorized_keys` permissions are `600`.
+- EC2 Security Group permits SSH from the runner's network path.
+
+## History 
+      sudo apt update
+      sudo apt update && sudo apt install -y nodejs npm
+      npm install pm2@latest -g
+      pm2 --version
+      sudo npm install pm2@latest -g
+      sudo apt install nginx
+      clear
+      sudo apt install mysql-server -y
+      sudo systemctl enable mysql
+      sudo systemctl start mysql
+      sudo mysql
+      sudo apt install -y nodejs rsync
+      clear
+      sudo chown -R "$USER":"$USER" /var/www
+      cd /var/www
+      git clone https://github.com/sumaya-shemo/ShopNest.git
+      ls -la
+      cd ShopNest
+      nano .env
+      npm i
+      npm start
+      whoami
+      sudo systemctl restart ShopNest
+      mysql -u shopnest_user -p shopnest_db
+      sudo mysql
+      which node
+      sudo nano /etc/systemd/system/shopnest.service
+      sudo systemctl daemon-reload
+      clear
+      sudo systemctl enable shopnest
+      sudo systemctl start shopnest
+      sudo systemctl status shopnest
+      sudo systemd-analyze verify /etc/systemd/system/shopnest.service
+      sudo cat -n /etc/systemd/system/shopnest.service
+      sudo nano /etc/systemd/system/shopnest.service
+      clear
+      sudo journalctl -u shopnest.service -n 100 --no-pager
+      sudo journalctl -u shopnest -n 40 --no-pager
+      clear
+      which node
+      sudo journalctl -u shopnest -n 40 --no-pager
+      sudo systemctl status shopnest --no-pager
+      sudo systemctl status shopnest
+      clear
+      sudo systemctl status shopnest
+      curl http://127.0.0.1:3000/health
+      history
+
 
 
 
