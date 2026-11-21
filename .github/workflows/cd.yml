@@ -84,7 +84,6 @@ jobs:
              sudo systemctl restart shopnest
              sudo systemctl is-active --quiet shopnest
              curl --fail --retry 5 --retry-delay 2 \
-               http://localhost:3000/health'
-
+               http://127.0.0.1:3000/health'
       - name: Deployment successful
         run: echo "ShopNest deployed successfully!"
