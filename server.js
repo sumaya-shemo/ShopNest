@@ -3,7 +3,7 @@ const app = require("./src/app");
 const pool = require("./config/database");
 
 const port = Number(process.env.PORT || 3000);
-const server = app.listen(port, () => {
+const server = app.listen(port,"0.0.0.0", () => {
   console.log(`ShopNest API listening on port ${port}`);
 });
 
@@ -16,3 +16,4 @@ async function shutdown(signal) {
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+

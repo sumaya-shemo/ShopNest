@@ -47,7 +47,7 @@ Express.js + MySQL product catalogue with a plain JavaScript frontend. MySQL run
 
 ```bash
 npm install
-cp .env.example .env
+
 # Edit .env with your MySQL connection values
 npm run db:setup
 npm run db:seed
@@ -174,7 +174,7 @@ GitHub allows the pull request to be merged.
 
 
 ## Part C: GitHub Actions Workflow Architecture
-
+## After Understand Part C requirement remove ci-cd.yml file and separate CI CD Pipeline
 ShopNest uses two separate GitHub Actions workflows:
 
 - **CI:** `.github/workflows/ci.yml`
@@ -289,6 +289,616 @@ The `main` branch requires the following status check:
 This gate depends on frontend lint, frontend tests, backend lint, backend tests on both Node.js versions, and both build jobs.
 
 A pull request cannot be merged until the required check succeeds.
+
+# ShopNest — Part D: Secrets and Configuration Management
+
+## 1. Objective
+
+ Part D requirements:
+
+- No credential, key, password, or server address may be committed to the repository or remain exposed in Git history.
+- Sensitive values must be stored and used securely.
+- Staging and production configuration must be kept separate.
+- Production deployments must require manual approval.
+- The README must list every secret and variable by name and purpose, without revealing values.
+
+## 2. Configuration management architecture
+
+ShopNest uses:
+
+- **GitHub Actions Secrets** for confidential values required by deployment workflows.
+- **GitHub Actions Variables** for non-sensitive deployment settings.
+- **GitHub Environments** to separate staging and production settings.
+- **Server-side `.env` files** for application runtime configuration.
+- **Git ignore rules** to prevent local environment files and private keys from being committed.
+
+The staging and production environments must have separate credentials, server configuration, and database configuration.
+
+## 3. Repository security
+
+Add the following rules to the repository's `.gitignore`:
+
+```gitignore
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Private keys and certificates
+*.pem
+*.key
+id_rsa
+id_ed25519
+
+# Dependencies and generated files
+node_modules/
+coverage/
+```
+
+The committed `.env.example` file must contain placeholder values only. For example:
+
+```env
+NODE_ENV=development
+PORT=3000
+
+DB_HOST=localhost
+DB_PORT=3306
+DB_NAME=shopnest_db
+DB_USER=your_database_user
+DB_PASSWORD=your_database_password
+```
+
+Never put real passwords, private SSH keys, server IP addresses, or production connection strings in `.env.example`, workflow files, source code, documentation, or commit messages.
+
+### If a secret was committed previously
+
+`.gitignore` does not remove files already tracked by Git and does not erase old commits. If a credential was exposed:
+
+1. Revoke or rotate the exposed credential immediately.
+2. Remove the sensitive value from the current repository files.
+3. Review the repository history for other exposed values.
+4. If required, rewrite Git history using a suitable history-cleaning tool such as `git-filter-repo`.
+5. Coordinate the history rewrite with other contributors and require fresh clones where appropriate.
+
+Treat an exposed credential as compromised even after removing it from the latest commit.
+
+## 4. Create GitHub Environments
+
+In the GitHub repository:
+
+1. Open **Settings**.
+2. Select **Environments**.
+3. Create an environment named `staging`.
+4. Create another environment named `production`.
+
+### Staging environment
+
+- Stores staging-specific deployment secrets and variables.
+- Deploys to the staging server and staging database.
+- Can deploy automatically after successful CI, according to the deployment workflow.
+
+### Production environment
+
+- Stores production-specific deployment secrets and variables.
+- Deploys to the production server and production database.
+- Uses environment protection rules to require manual approval.
+
+Use the same secret and variable names in both environments where practical, but configure different values in each environment. This allows a workflow to reference `secrets.SERVER_HOST` without hardcoding which server it should use.
+
+## 5. GitHub Environment Secrets
+
+Configure these secrets separately under **Settings → Environments → staging** and **Settings → Environments → production**.
+
+| Secret name | Purpose |
+|---|---|
+| `SERVER_HOST` | IP address or hostname of the environment's deployment server |
+| `SERVER_USER` | SSH username used by GitHub Actions to connect to the server |
+| `SERVER_SSH_KEY` | Private SSH key used for deployment authentication |
+| `SERVER_KNOWN_HOSTS` | Verified SSH host-key entry used to authenticate the server |
+| `DB_PASSWORD` | Database password only if a GitHub Actions workflow genuinely needs it |
+
+Do not put secret values in this document.
+
+**Database password guidance:** If the ShopNest application reads its database password from a server-side `.env` file, keep the password on the server. Do not create a GitHub secret for it unless an automated workflow actually needs to connect to the database.
+
+## 6. GitHub Environment Variables
+
+Configure these non-sensitive variables separately for staging and production.
+
+| Variable name | Purpose |
+|---|---|
+| `SERVER_PORT` | SSH port used to connect to the deployment server |
+| `DEPLOY_PATH` | Directory where the ShopNest release is deployed |
+| `SERVICE_NAME` | systemd service name used to manage the application |
+| `APP_PORT` | Port on which the ShopNest backend listens |
+
+Example purposes, not secret values:
+
+- Staging deployment path: the staging application's directory.
+- Production deployment path: the production application's directory.
+- Staging service name: the staging systemd service.
+- Production service name: the production systemd service.
+
+## 7. Keep runtime configuration separate
+
+The ShopNest application requires runtime configuration such as:
+
+- `NODE_ENV`
+- `PORT`
+- `DB_HOST`
+- `DB_PORT`
+- `DB_NAME`
+- `DB_USER`
+- `DB_PASSWORD`
+
+Keep separate runtime `.env` files on the appropriate servers. For example:
+
+- Staging: the `.env` file stored in the staging application's protected directory.
+- Production: the `.env` file stored in the production application's protected directory.
+
+The real values must be entered directly on the relevant server or supplied through an approved secure configuration mechanism. Do not commit either file.
+
+For a single-server production setup, a protected location such as `/etc/shopnest/shopnest.env` can be used. The systemd service can load it with `EnvironmentFile=`.
+
+Restrict access to runtime environment files. For example:
+
+```bash
+sudo chown shopnest:shopnest /etc/shopnest/shopnest.env
+sudo chmod 600 /etc/shopnest/shopnest.env
+```
+
+Use the actual service account and path configured on the server.
+
+## 8. Protect `.env` during deployment
+
+Deployment synchronization must not overwrite or delete the server's runtime environment file.
+
+For example, an `rsync` deployment should exclude `.env`:
+
+```bash
+rsync -avz --delete \
+  --exclude='.env' \
+  ./bundle/ \
+  "$SERVER_USER@$SERVER_HOST:$DEPLOY_PATH/"
+```
+
+If the deployment uses versioned release directories, keep the runtime environment file outside those release directories and configure systemd to load it from the protected location.
+
+## 9. Production manual approval
+
+In GitHub:
+
+1. Open **Settings → Environments → production**.
+2. Configure **Required reviewers**.
+3. Add the authorized person or team.
+4. Enable prevention of self-review if available.
+5. Restrict deployment branches to `main` where supported.
+6. Save the environment protection rules.
+
+The production deployment job in the workflow must reference the environment:
+
+```yaml
+jobs:
+  deploy-production:
+    name: Deploy to Production
+    environment: production
+    runs-on: ubuntu-latest
+    steps:
+      # Production deployment steps
+```
+
+When the workflow reaches this job, GitHub pauses it until an authorized reviewer approves the deployment, subject to the repository's plan and environment-protection feature availability.
+
+## 10. Use secrets and variables in GitHub Actions
+
+Reference confidential values through the `secrets` context:
+
+```yaml
+env:
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_USER: ${{ secrets.SERVER_USER }}
+  SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+  
+```
+
+Reference non-sensitive settings through the `vars` context:
+
+```yaml
+env:
+  SERVER_PORT: ${{ vars.SERVER_PORT }}
+  DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+  SERVICE_NAME: ${{ vars.SERVICE_NAME }}
+  APP_PORT: ${{ vars.APP_PORT }}
+```
+
+Do not print secret values to workflow logs. Avoid enabling shell tracing (`set -x`) in steps that handle credentials. Use least-privilege permissions for deployment accounts and GitHub workflow tokens.
+
+## 11. Secret and variable inventory
+
+
+
+### Secrets
+
+| Name | Purpose |
+|---|---|
+| `SERVER_HOST` | Environment-specific deployment server address |
+| `SERVER_USER` | SSH deployment username |
+| `SERVER_SSH_KEY` | SSH private key for deployment |
+| `DB_PASSWORD` | Database password only if a workflow needs it |
+
+### Variables
+
+| Name | Purpose |
+|---|---|
+| `SERVER_PORT` | SSH port |
+| `DEPLOY_PATH` | Deployment directory |
+| `SERVICE_NAME` | systemd service name |
+| `APP_PORT` | Backend application port |
+
+### Runtime environment configuration
+
+| Name | Purpose |
+|---|---|
+| `NODE_ENV` | Identifies the application environment |
+| `PORT` | Backend listening port |
+| `DB_HOST` | Database hostname or address |
+| `DB_PORT` | Database port |
+| `DB_NAME` | Database name |
+| `DB_USER` | Database application username |
+| `DB_PASSWORD` | Database application password |
+
+The runtime configuration values are maintained in the server-side environment file. They are not all GitHub Actions secrets or variables.
+
+## Part E: Automated Deployment to EC2
+
+## 1. Part E requirements
+
+The deployment process should:
+
+1. Start after the ShopNest CI workflow completes successfully for a push to `main`.
+2. Download the release artifact produced by that exact CI run.
+3. Connect to the Ubuntu EC2 instance using SSH.
+4. Upload the application files to the server.
+5. Install production dependencies.
+6. Restart the ShopNest application service.
+7. Verify that the application is running and responding.
+8. Record the Git commit SHA deployed to the server.
+9. Keep the database private and keep runtime secrets on the server.
+
+## 2. Deployment architecture
+
+For the assignment's single-EC2 deployment, the application can be arranged as three logical tiers on one Ubuntu server:
+
+```text
+                    Internet
+                       |
+                 HTTPS / HTTP
+                       |
+                 AWS Security Group
+                       |
+                  Nginx :80/:443
+                  /             \
+          Frontend files       /api requests
+          /var/www/.../public       |
+                               Express API
+                                127.0.0.1:3000
+                                      |
+                                   MySQL
+                                127.0.0.1:3306
+```
+
+GitHub Actions deploys the application to EC2:
+
+```text
+Developer pushes to main
+          |
+          v
+    GitHub CI workflow
+          |
+    CI checks succeed?
+          |
+          v
+  Package release artifact
+          |
+          v
+    GitHub CD workflow
+          |
+       SSH / rsync
+          |
+          v
+       Ubuntu EC2
+          |
+   Install dependencies
+          |
+   Restart systemd service
+          |
+     Health check
+          |
+  Record deployed commit SHA
+```
+
+**Important:** This is a logical three-tier layout, not three physically separate servers.
+
+## 3. AWS EC2 and network configuration
+
+### 3.1 Security Group
+
+Recommended inbound rules for a basic deployment:
+
+![Security Group]()
+
+### 3.2 Install server packages
+
+Connect to EC2:
+
+```bash
+ssh -i your-key.pem ubuntu@EC2_PUBLIC_IP
+```
+
+Update Ubuntu:
+
+```bash
+sudo apt update
+sudo apt upgrade -y
+```
+
+Install required packages:
+
+```bash
+sudo apt install -y nginx mysql-server git rsync curl
+```
+
+Install a supported Node.js LTS release using your chosen trusted installation method, then verify:
+
+```bash
+node --version
+npm --version
+nginx -v
+mysql --version
+```
+## 4. MySQL configuration
+
+The database should not be publicly reachable.
+
+Check MySQL:
+
+```bash
+sudo systemctl status mysql
+```
+
+Open the MySQL shell:
+
+```bash
+sudo mysql
+```
+
+Example database and application user setup:
+
+```sql
+CREATE DATABASE shopnest_db;
+
+CREATE USER 'shopnest_user'@'localhost'
+IDENTIFIED BY 'REPLACE_WITH_A_STRONG_UNIQUE_PASSWORD';
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON shopnest_db.*
+TO 'shopnest_user'@'localhost';
+
+FLUSH PRIVILEGES;
+EXIT;
+```
+Check the MySQL bind address:
+
+```bash
+sudo ss -tlnp | grep 3306
+```
+
+For a same-server database, configure MySQL to listen on loopback (`127.0.0.1`) and restart it:
+
+```bash
+sudo systemctl restart mysql
+
+## 5. Application configuration on EC2
+
+Keep production environment variables outside the Git repository and outside the uploaded release.
+
+Create a protected configuration directory:
+
+```bash
+sudo mkdir -p /etc/shopnest
+sudo chown root:root /etc/shopnest
+sudo chmod 750 /etc/shopnest
+```
+
+Create the production environment file:
+
+```bash
+sudo nano /etc/shopnest/shopnest.env
+```
+Protect the file:
+
+```bash
+sudo chown root:root /etc/shopnest/shopnest.env
+sudo chmod 600 /etc/shopnest/shopnest.env
+```
+## 6. Create the ShopNest systemd service
+
+Create the service file:
+
+```bash
+sudo nano /etc/systemd/system/shopnest.service
+```
+
+Example service configuration:
+
+```ini
+[Unit]
+Description=ShopNest Product Management Application
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/var/www/shopnest
+EnvironmentFile=/etc/shopnest/shopnest.env
+ExecStart=/usr/bin/node /var/www/shopnest/server.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Check the actual Node.js path before using it:
+
+```bash
+which node
+```
+
+If it is not `/usr/bin/node`, update `ExecStart` to the path returned by `which node`.
+
+Create the deployment directory and give the deployment user ownership:
+
+```bash
+sudo mkdir -p /var/www/shopnest
+sudo chown -R ubuntu:ubuntu /var/www/shopnest
+```
+
+Load and enable the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable shopnest
+```
+
+The first start will succeed only after the application files have been deployed:
+
+```bash
+sudo systemctl start shopnest
+sudo systemctl status shopnest
+```
+
+Useful troubleshooting commands:
+
+```bash
+sudo journalctl -u shopnest -n 100 --no-pager
+sudo journalctl -u shopnest -f
+sudo systemctl restart shopnest
+sudo systemctl is-active shopnest
+
+## 7. Nginx configuration
+
+Nginx is the public web server and reverse proxy. It can serve the frontend and forward API requests to Express.
+
+Create a site configuration:
+
+```bash
+sudo nano /etc/nginx/sites-available/shopnest
+```
+
+Example:
+
+```nginx
+server {
+    listen 80;
+    server_name YOUR_DOMAIN_OR_PUBLIC_IP;
+
+    root /var/www/shopnest/public;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /health {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+    }
+}
+```
+
+The `proxy_pass` form above preserves the incoming URI path. Confirm that the Express API routes expect paths such as `/api/products`. If the Express application expects `/products` instead, adjust the Nginx URI handling accordingly.
+
+Enable the site:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/shopnest /etc/nginx/sites-enabled/shopnest
+sudo nginx -t
+sudo systemctl reload nginx
+
+## 12. Common deployment errors and troubleshooting
+
+### 12.1 `Permission denied (publickey)`
+
+Check:
+
+- `SERVER_USER` matches the EC2 login user, for example `ubuntu`.
+- `SERVER_SSH_KEY` contains the complete private key, including its header and footer.
+- The matching public key is in the correct user's `~/.ssh/authorized_keys`.
+- `.ssh` permissions are `700` and `authorized_keys` permissions are `600`.
+- EC2 Security Group permits SSH from the runner's network path.
+
+## History 
+      sudo apt update
+      sudo apt update && sudo apt install -y nodejs npm
+      npm install pm2@latest -g
+      pm2 --version
+      sudo npm install pm2@latest -g
+      sudo apt install nginx
+      clear
+      sudo apt install mysql-server -y
+      sudo systemctl enable mysql
+      sudo systemctl start mysql
+      sudo mysql
+      sudo apt install -y nodejs rsync
+      clear
+      sudo chown -R "$USER":"$USER" /var/www
+      cd /var/www
+      git clone https://github.com/sumaya-shemo/ShopNest.git
+      ls -la
+      cd ShopNest
+      nano .env
+      npm i
+      npm start
+      whoami
+      sudo systemctl restart ShopNest
+      mysql -u shopnest_user -p shopnest_db
+      sudo mysql
+      which node
+      sudo nano /etc/systemd/system/shopnest.service
+      sudo systemctl daemon-reload
+      clear
+      sudo systemctl enable shopnest
+      sudo systemctl start shopnest
+      sudo systemctl status shopnest
+      sudo systemd-analyze verify /etc/systemd/system/shopnest.service
+      sudo cat -n /etc/systemd/system/shopnest.service
+      sudo nano /etc/systemd/system/shopnest.service
+      clear
+      sudo journalctl -u shopnest.service -n 100 --no-pager
+      sudo journalctl -u shopnest -n 40 --no-pager
+      clear
+      which node
+      sudo journalctl -u shopnest -n 40 --no-pager
+      sudo systemctl status shopnest --no-pager
+      sudo systemctl status shopnest
+      clear
+      sudo systemctl status shopnest
+      curl http://127.0.0.1:3000/health
+      history
+
+
+
 
 
 
