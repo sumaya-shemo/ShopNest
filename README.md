@@ -100,7 +100,8 @@ For deployment, configure these repository Actions secrets:
 - `SERVER_USER`: deployment account
 - `SERVER_SSH_KEY`: private key matching the server user's `authorized_keys`
 - `SERVER_PORT`: optional SSH port (defaults to 22)
-![Repository Actions secrets]()
+  
+![Repository Actions secrets](https://github.com/sumaya-shemo/ShopNest/blob/65ce564c0dd3dab4891c543cf2b7f4fdce046788/ShopNest_Image/BranchProtection.png)
 
 The workflow syncs the application to `/var/www/shopnest`, preserves the server-side `.env`, installs production dependencies, restarts `shopnest.service`, and checks `/health`. The server must already have Node.js, npm, rsync, MySQL, the production `.env`, and the systemd service configured. Give the deploy user only the required directory and service permissions.
 
